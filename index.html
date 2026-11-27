@@ -1,0 +1,945 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="only light">
+  <title>JUZ40 OCR Engine</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%234F46E5'/%3E%3Cpath d='M9 10h14M9 16h14M9 22h8' stroke='white' stroke-width='2.5' stroke-linecap='round'/%3E%3C/svg%3E">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css">
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            display: ['"Plus Jakarta Sans"', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+            sans: ['Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'ui-monospace', 'SFMono-Regular', 'monospace']
+          }
+        }
+      }
+    };
+  </script>
+  <!-- KaTeX + mhchem (needed for \ce{...} chemical equations) -->
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"></script>
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/contrib/mhchem.min.js"></script>
+
+  <style>
+    :root { color-scheme: only light; }
+    html, body { color-scheme: only light; background-color: #F8FAFC; }
+    body { color: #0F172A; -webkit-font-smoothing: antialiased; }
+
+    /* Custom 6px scrollbars everywhere */
+    * { scrollbar-width: thin; scrollbar-color: #CBD5E1 transparent; }
+    *::-webkit-scrollbar { width: 6px; height: 6px; }
+    *::-webkit-scrollbar-track { background: transparent; }
+    *::-webkit-scrollbar-thumb { background-color: #CBD5E1; border-radius: 9999px; }
+    *::-webkit-scrollbar-corner { background: transparent; }
+
+    button { font: inherit; }
+    :focus-visible { outline: 2px solid #6366F1; outline-offset: 2px; }
+
+    /* Drop zone drag state (id selector beats Tailwind utilities) */
+    #dropzone.is-drag { border-color: #6366F1; background-color: #EEF2FF; }
+
+    /* KaTeX */
+    .katex { font-size: 1.12em; }
+    .katex-display { margin: 0; padding: 2px 0; overflow-x: auto; overflow-y: hidden; }
+
+    /* Entrance animation for result cards */
+    @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+    .rise { animation: rise .4s cubic-bezier(.2, .7, .2, 1) both; }
+    @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+    .fade { animation: fade .2s ease both; }
+
+    /* Layout overlay on the preview */
+    .ov-box {
+      position: absolute;
+      border: 2px solid var(--c);
+      background: color-mix(in srgb, var(--c) 8%, transparent);
+      border-radius: 4px;
+      transition: background-color .15s, box-shadow .15s;
+    }
+    .ov-box.is-hot {
+      background: color-mix(in srgb, var(--c) 30%, transparent);
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 25%, transparent);
+      z-index: 2;
+    }
+    .ov-tag {
+      position: absolute; left: -2px; top: -18px;
+      background: var(--c); color: #fff;
+      font: 500 10px/16px "JetBrains Mono", ui-monospace, monospace;
+      padding: 0 5px; border-radius: 4px 4px 4px 0;
+    }
+
+    .figure-grid {
+      background-color: #F1F5F9;
+      background-image:
+        linear-gradient(#E2E8F0 1px, transparent 1px),
+        linear-gradient(90deg, #E2E8F0 1px, transparent 1px);
+      background-size: 16px 16px;
+    }
+
+    /* JSON syntax colours (light theme) */
+    .j-key { color: #4338CA; }
+    .j-str { color: #047857; }
+    .j-num { color: #B45309; }
+    .j-bool { color: #BE185D; }
+    .j-null { color: #64748B; }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+    }
+  </style>
+</head>
+
+<body class="font-sans min-h-screen">
+
+  <!-- ============================== HEADER ============================== -->
+  <header class="sticky top-0 z-30 bg-white/90 backdrop-blur border-b border-slate-200">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-3">
+      <div class="flex items-center gap-3 min-w-0">
+        <div class="w-9 h-9 shrink-0 rounded-xl bg-gradient-to-br from-indigo-500 to-indigo-700 text-white grid place-items-center shadow-sm">
+          <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2"/></svg>
+        </div>
+        <div class="min-w-0">
+          <p class="font-display font-extrabold text-[15px] sm:text-[17px] leading-tight text-slate-900 truncate">JUZ40 OCR Engine</p>
+          <p class="hidden sm:block text-xs text-slate-500 leading-tight">Handwritten STEM recognition</p>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-2 sm:gap-3 shrink-0">
+        <div id="status-badge" class="inline-flex items-center gap-2 rounded-full px-2.5 sm:px-3 py-1.5 text-xs font-semibold ring-1 ring-inset bg-emerald-50 text-emerald-700 ring-emerald-200" role="status">
+          <span class="relative flex h-2 w-2">
+            <span id="status-ping" class="absolute inline-flex h-full w-full rounded-full opacity-75 animate-ping bg-emerald-400"></span>
+            <span id="status-dot" class="relative inline-flex h-2 w-2 rounded-full bg-emerald-500"></span>
+          </span>
+          <span id="status-long" class="hidden sm:inline">GPU: NVIDIA L4 Active</span>
+          <span id="status-short" class="sm:hidden">L4 Active</span>
+        </div>
+        <button type="button" data-action="open-settings" id="settings-btn" aria-label="Open settings"
+          class="w-9 h-9 grid place-items-center rounded-xl border border-slate-200 bg-white text-slate-600 shadow-sm hover:bg-slate-50 hover:text-slate-900 transition">
+          <svg class="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- ============================== MAIN ============================== -->
+  <main class="max-w-7xl mx-auto px-4 sm:px-6 py-8">
+    <div class="mb-6">
+      <h1 class="font-display font-extrabold text-2xl sm:text-3xl tracking-tight text-slate-900">Handwritten document recognition</h1>
+      <p class="mt-1.5 text-sm sm:text-base text-slate-600 max-w-2xl">Upload a photo or scan of a handwritten solution. The engine detects layout blocks and returns text, formulas, chemical structures and drawings as structured JSON.</p>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+
+      <!-- ============ LEFT: INPUT ============ -->
+      <section aria-label="Input" class="bg-white rounded-xl border border-slate-200 shadow-sm divide-y divide-slate-100">
+
+        <div class="p-5">
+          <div class="flex items-center gap-2.5 mb-3.5">
+            <span class="w-6 h-6 rounded-lg bg-indigo-50 text-indigo-700 text-xs font-bold grid place-items-center">1</span>
+            <h2 class="font-display font-bold text-[15px] text-slate-900">Source document</h2>
+          </div>
+          <div id="dropzone" class="rounded-xl transition-colors"></div>
+          <p id="drop-error" class="hidden mt-3 items-start gap-2 text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2" role="alert"></p>
+          <input id="file-input" type="file" accept="image/png,image/jpeg,image/webp" class="hidden" tabindex="-1" aria-hidden="true">
+        </div>
+
+        <div class="p-5">
+          <div class="flex items-center gap-2.5 mb-3.5">
+            <span class="w-6 h-6 rounded-lg bg-indigo-50 text-indigo-700 text-xs font-bold grid place-items-center">2</span>
+            <h2 id="subject-label" class="font-display font-bold text-[15px] text-slate-900">Subject</h2>
+          </div>
+          <div id="subjects" role="radiogroup" aria-labelledby="subject-label" class="grid grid-cols-1 min-[420px]:grid-cols-2 gap-3"></div>
+        </div>
+
+        <div class="p-5">
+          <button id="process-btn" type="button" data-action="process"
+            class="w-full h-12 rounded-xl font-display font-bold text-[15px] inline-flex items-center justify-center gap-2 transition"></button>
+          <p id="process-hint" class="mt-2.5 text-center text-xs text-slate-500"></p>
+        </div>
+      </section>
+
+      <!-- ============ RIGHT: OUTPUT ============ -->
+      <section aria-label="Output" class="relative bg-white rounded-xl border border-slate-200 shadow-sm min-h-[560px] flex flex-col">
+        <div class="px-5 pt-4 border-b border-slate-200">
+          <div class="flex items-center justify-between gap-3 mb-3">
+            <h2 class="font-display font-bold text-[15px] text-slate-900">Recognition result</h2>
+            <span id="job-pill" class="hidden font-mono text-xs text-slate-600 bg-slate-100 rounded-md px-2 py-1"></span>
+          </div>
+          <div id="tabs" role="tablist" aria-label="Output views" class="flex gap-5 overflow-x-auto"></div>
+        </div>
+
+        <div id="output-body" role="tabpanel" class="flex-1 p-5 min-w-0"></div>
+
+        <!-- Processing overlay -->
+        <div id="overlay" class="hidden absolute inset-0 z-20 rounded-xl bg-white/90 backdrop-blur-sm grid place-items-center fade" role="status" aria-live="polite">
+          <div class="w-full max-w-sm px-6">
+            <div class="flex items-center gap-3 mb-5">
+              <div class="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 grid place-items-center">
+                <svg class="w-5 h-5 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.22-8.56"/></svg>
+              </div>
+              <div class="min-w-0">
+                <p class="font-display font-bold text-slate-900 leading-tight">Processing document</p>
+                <p id="overlay-env" class="text-xs text-slate-500">GPU inference · NVIDIA L4</p>
+              </div>
+              <span id="elapsed" class="ml-auto font-mono text-xs text-slate-500 tabular-nums">0.0s</span>
+            </div>
+            <div class="h-1.5 rounded-full bg-slate-100 overflow-hidden mb-5">
+              <div id="bar" class="h-full rounded-full bg-indigo-600 transition-all duration-700 ease-out" style="width:0%"></div>
+            </div>
+            <ol id="steps" class="space-y-3"></ol>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <!-- ============================== SETTINGS MODAL ============================== -->
+  <div id="settings" class="hidden fixed inset-0 z-50 fade" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+    <div class="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" data-action="close-settings"></div>
+    <div class="relative min-h-full flex items-center justify-center p-4 pointer-events-none">
+      <div class="pointer-events-auto w-full max-w-md bg-white rounded-xl border border-slate-200 shadow-2xl">
+        <div class="flex items-start justify-between gap-4 p-5 pb-0">
+          <div>
+            <h2 id="settings-title" class="font-display font-bold text-lg text-slate-900">Settings</h2>
+            <p class="text-sm text-slate-500 mt-0.5">Choose where documents are processed.</p>
+          </div>
+          <button type="button" data-action="close-settings" aria-label="Close settings"
+            class="w-8 h-8 grid place-items-center rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-800 transition">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+          </button>
+        </div>
+        <div class="p-5">
+          <p id="env-label" class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2.5">Processing environment</p>
+          <div id="env-options" role="radiogroup" aria-labelledby="env-label" class="grid grid-cols-2 gap-1 p-1 rounded-xl bg-slate-100"></div>
+          <p id="env-desc" class="mt-3 text-sm text-slate-600 min-h-[2.5rem]"></p>
+        </div>
+        <div class="flex items-center justify-between gap-3 px-5 py-4 border-t border-slate-100 bg-slate-50/60 rounded-b-xl">
+          <p class="text-xs text-slate-500">Saved in this browser.</p>
+          <button type="button" data-action="close-settings"
+            class="h-9 px-4 rounded-lg bg-slate-900 text-white text-sm font-semibold hover:bg-slate-800 transition">Done</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  'use strict';
+
+  /* ------------------------------------------------------------------ *
+   * Helpers
+   * ------------------------------------------------------------------ */
+  const $ = (sel, root = document) => root.querySelector(sel);
+
+  const ICONS = {
+    upload: '<path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"/><path d="M12 12v9"/><path d="m16 16-4-4-4 4"/>',
+    check: '<path d="M20 6 9 17l-5-5"/>',
+    x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+    copy: '<rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
+    play: '<path d="m6 3 14 9-14 9z"/>',
+    alert: '<circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/>',
+    layers: '<path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/>',
+    refresh: '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
+    file: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/>',
+    shapes: '<path d="M8.3 10a.7.7 0 0 1-.626-1.079L11.4 3a.7.7 0 0 1 1.198-.043L16.3 8.9a.7.7 0 0 1-.572 1.1Z"/><rect x="3" y="14" width="7" height="7" rx="1"/><circle cx="17.5" cy="17.5" r="3.5"/>',
+    sigma: '<path d="M18 7V5a1 1 0 0 0-1-1H6.5a.5.5 0 0 0-.4.8l4.5 6a2 2 0 0 1 0 2.4l-4.5 6a.5.5 0 0 0 .4.8H17a1 1 0 0 0 1-1v-2"/>',
+    atom: '<circle cx="12" cy="12" r="1"/><path d="M20.2 20.2c2.04-2.03.02-7.36-4.5-11.9-4.54-4.52-9.87-6.54-11.9-4.5-2.04 2.03-.02 7.36 4.5 11.9 4.54 4.52 9.87 6.54 11.9 4.5Z"/><path d="M15.7 15.7c4.52-4.54 6.54-9.87 4.5-11.9-2.03-2.04-7.36-.02-11.9 4.5-4.52 4.54-6.54 9.87-4.5 11.9 2.03 2.04 7.36.02 11.9-4.5Z"/>',
+    flask: '<path d="M10 2v7.527a2 2 0 0 1-.211.896L4.72 20.55a1 1 0 0 0 .9 1.45h12.76a1 1 0 0 0 .9-1.45l-5.069-10.127A2 2 0 0 1 14 9.527V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/>',
+    triangle: '<path d="M13.73 4a2 2 0 0 0-3.46 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/>',
+    gpu: '<rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2"/>',
+    cloud: '<path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/>',
+    image: '<rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>'
+  };
+  const icon = (name, cls = 'w-5 h-5', sw = 2) =>
+    `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
+
+  const esc = (s) => String(s).replace(/[&<>"']/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  const fmtBytes = (n) => n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(2)} MB`;
+  const pct = (v) => `${Math.round(v * 100)}%`;
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  const store = {
+    get(key, fallback) { try { const v = localStorage.getItem(key); return v === null ? fallback : v; } catch (_) { return fallback; } },
+    set(key, value) { try { localStorage.setItem(key, value); } catch (_) { /* storage unavailable */ } }
+  };
+
+  /* ------------------------------------------------------------------ *
+   * Static config
+   * ------------------------------------------------------------------ */
+  const SUBJECTS = [
+    { id: 'Math',      label: 'Math',      hint: 'Algebra, calculus',  icon: 'sigma' },
+    { id: 'Physics',   label: 'Physics',   hint: 'Mechanics, optics',  icon: 'atom' },
+    { id: 'Chemistry', label: 'Chemistry', hint: 'Reactions, SMILES',  icon: 'flask' },
+    { id: 'Geometry',  label: 'Geometry',  hint: 'Figures, proofs',    icon: 'triangle' }
+  ];
+
+  const ENVS = {
+    gpu: {
+      label: 'Local GPU (L4)', icon: 'gpu',
+      badgeLong: 'GPU: NVIDIA L4 Active', badgeShort: 'L4 Active',
+      badge: 'bg-emerald-50 text-emerald-700 ring-emerald-200', ping: 'bg-emerald-400', dot: 'bg-emerald-500',
+      overlay: 'GPU inference · NVIDIA L4',
+      desc: 'Documents are processed on the on-premise NVIDIA L4 GPU. Data does not leave your infrastructure.'
+    },
+    api: {
+      label: 'External API', icon: 'cloud',
+      badgeLong: 'External API: Connected', badgeShort: 'API Connected',
+      badge: 'bg-sky-50 text-sky-700 ring-sky-200', ping: 'bg-sky-400', dot: 'bg-sky-500',
+      overlay: 'Remote inference · External API',
+      desc: 'Documents are sent to the external recognition API. Use for load peaks or when no GPU is available.'
+    }
+  };
+
+  const PIPELINE = [
+    'Preprocessing image (Deskew, Binarization)...',
+    'Detecting layout blocks (C01-C06)...',
+    'Running LaTeX OCR engine...',
+    'Extracting SMILES chemistry...',
+    'Generating final JSON payload...'
+  ];
+  const PIPELINE_MS = 4000;
+
+  const TYPES = {
+    text:           { label: 'Text',           pill: 'bg-slate-100 text-slate-700',     color: '#64748B' },
+    formula:        { label: 'Formula',        pill: 'bg-blue-50 text-blue-700',        color: '#2563EB' },
+    chem_structure: { label: 'Chem structure', pill: 'bg-violet-50 text-violet-700',    color: '#7C3AED' },
+    drawing:        { label: 'Drawing',        pill: 'bg-amber-50 text-amber-700',      color: '#D97706' },
+    answer:         { label: 'Answer',         pill: 'bg-emerald-50 text-emerald-700',  color: '#059669' }
+  };
+  const typeMeta = (t) => TYPES[t] || { label: t, pill: 'bg-slate-100 text-slate-700', color: '#64748B' };
+
+  const TABS = [
+    { id: 'rendered', label: 'Rendered Output' },
+    { id: 'json',     label: 'JSON Payload' },
+    { id: 'trace',    label: 'API Trace' }
+  ];
+
+  const MAX_BYTES = 10 * 1024 * 1024;
+
+  /* ------------------------------------------------------------------ *
+   * State
+   * ------------------------------------------------------------------ */
+  const state = {
+    file: null, url: null, img: null,
+    subject: 'Math',
+    env: store.get('juz40.env', 'gpu') in ENVS ? store.get('juz40.env', 'gpu') : 'gpu',
+    busy: false,
+    tab: 'rendered',
+    result: null,     // { data, raw, trace }
+    error: null,
+    showLayout: false,
+    hot: null
+  };
+
+  const els = {
+    drop: $('#dropzone'), dropError: $('#drop-error'), fileInput: $('#file-input'),
+    subjects: $('#subjects'), processBtn: $('#process-btn'), processHint: $('#process-hint'),
+    tabs: $('#tabs'), body: $('#output-body'), jobPill: $('#job-pill'),
+    overlay: $('#overlay'), steps: $('#steps'), bar: $('#bar'), elapsed: $('#elapsed'), overlayEnv: $('#overlay-env'),
+    settings: $('#settings'), envOptions: $('#env-options'), envDesc: $('#env-desc'),
+    badge: $('#status-badge'), ping: $('#status-ping'), dot: $('#status-dot'),
+    badgeLong: $('#status-long'), badgeShort: $('#status-short')
+  };
+
+  /* ------------------------------------------------------------------ *
+   * Environment (header badge + settings modal)
+   * ------------------------------------------------------------------ */
+  function renderEnv() {
+    const e = ENVS[state.env];
+    els.badge.className = `inline-flex items-center gap-2 rounded-full px-2.5 sm:px-3 py-1.5 text-xs font-semibold ring-1 ring-inset ${e.badge}`;
+    els.ping.className = `absolute inline-flex h-full w-full rounded-full opacity-75 animate-ping ${e.ping}`;
+    els.dot.className = `relative inline-flex h-2 w-2 rounded-full ${e.dot}`;
+    els.badgeLong.textContent = e.badgeLong;
+    els.badgeShort.textContent = e.badgeShort;
+    els.overlayEnv.textContent = e.overlay;
+    els.envDesc.textContent = e.desc;
+    els.envOptions.innerHTML = Object.entries(ENVS).map(([id, env]) => {
+      const on = id === state.env;
+      return `<button type="button" role="radio" aria-checked="${on}" data-action="env:${id}"
+        class="h-11 rounded-lg px-2 inline-flex items-center justify-center gap-2 text-sm font-semibold transition ${on ? 'bg-white text-slate-900 shadow-sm ring-1 ring-slate-200' : 'text-slate-500 hover:text-slate-800'}">
+        ${icon(env.icon, 'w-4 h-4')}<span>${env.label}</span></button>`;
+    }).join('');
+  }
+
+  let lastFocus = null;
+  function openSettings() {
+    lastFocus = document.activeElement;
+    els.settings.classList.remove('hidden');
+    const active = els.envOptions.querySelector('[aria-checked="true"]');
+    if (active) active.focus();
+  }
+  function closeSettings() {
+    els.settings.classList.add('hidden');
+    if (lastFocus && lastFocus.focus) lastFocus.focus();
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Upload
+   * ------------------------------------------------------------------ */
+  function showDropError(msg) {
+    els.dropError.innerHTML = `${icon('alert', 'w-4 h-4 mt-0.5 shrink-0')}<span>${esc(msg)}</span>`;
+    els.dropError.classList.remove('hidden');
+    els.dropError.classList.add('flex');
+  }
+  function clearDropError() {
+    els.dropError.classList.add('hidden');
+    els.dropError.classList.remove('flex');
+  }
+
+  function setFile(file) {
+    if (!file || state.busy) return;
+    if (!/^image\/(png|jpe?g|webp)$/i.test(file.type)) {
+      showDropError('Unsupported format. Please upload a PNG, JPG or WEBP image.');
+      return;
+    }
+    if (file.size > MAX_BYTES) {
+      showDropError(`File is too large (${fmtBytes(file.size)}). Maximum size is 10 MB.`);
+      return;
+    }
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      if (state.url) URL.revokeObjectURL(state.url);
+      Object.assign(state, { file, url, img, result: null, error: null, showLayout: false, hot: null, tab: 'rendered' });
+      clearDropError();
+      renderAll();
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      showDropError('This image could not be read. Please try another file.');
+    };
+    img.src = url;
+  }
+
+  function removeFile() {
+    if (state.busy) return;
+    if (state.url) URL.revokeObjectURL(state.url);
+    Object.assign(state, { file: null, url: null, img: null, result: null, error: null, showLayout: false, hot: null, tab: 'rendered' });
+    els.fileInput.value = '';
+    clearDropError();
+    renderAll();
+  }
+
+  function layoutOverlay() {
+    if (!state.showLayout || !state.result) return '';
+    const blocks = state.result.data.pages.flatMap((p) => p.blocks).filter((b) => Array.isArray(b.bbox));
+    return `<div class="absolute inset-0 pointer-events-none">${blocks.map((b) => {
+      const [x, y, w, h] = b.bbox;
+      return `<div class="ov-box" data-ov="${esc(b.id)}" style="--c:${typeMeta(b.type).color};left:${x * 100}%;top:${y * 100}%;width:${w * 100}%;height:${h * 100}%">
+        <span class="ov-tag">${esc(b.id)}</span></div>`;
+    }).join('')}</div>`;
+  }
+
+  function renderDrop() {
+    const dz = els.drop;
+    if (!state.file) {
+      dz.className = 'rounded-xl transition-colors border-2 border-dashed border-slate-300 bg-slate-50/60 hover:border-indigo-400 hover:bg-indigo-50/40 cursor-pointer';
+      dz.setAttribute('role', 'button');
+      dz.setAttribute('tabindex', '0');
+      dz.setAttribute('aria-label', 'Upload a document image. Drag and drop or press Enter to browse.');
+      dz.dataset.action = 'pick';
+      dz.innerHTML = `
+        <div class="flex flex-col items-center text-center px-6 py-12">
+          <div class="w-14 h-14 rounded-xl bg-indigo-50 text-indigo-600 grid place-items-center mb-4 shadow-sm">${icon('upload', 'w-7 h-7', 1.75)}</div>
+          <p class="font-display font-bold text-slate-900">Drag &amp; drop a handwritten page</p>
+          <p class="text-sm text-slate-600 mt-1">or <span class="text-indigo-600 font-semibold">browse files</span> from your device</p>
+          <p class="text-xs text-slate-400 mt-3">PNG, JPG or WEBP · up to 10 MB</p>
+        </div>`;
+      return;
+    }
+    dz.className = 'rounded-xl transition-colors border border-slate-200 bg-slate-50';
+    dz.removeAttribute('role'); dz.removeAttribute('tabindex'); dz.removeAttribute('aria-label');
+    delete dz.dataset.action;
+    const { img, file } = state;
+    const btn = 'h-8 px-3 rounded-lg border border-slate-200 bg-white text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50 transition inline-flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed';
+    dz.innerHTML = `
+      <div class="p-3">
+        <div class="flex justify-center rounded-lg bg-white border border-slate-200 p-2">
+          <div class="relative inline-block max-w-full">
+            <img src="${state.url}" alt="Uploaded document preview" class="block max-h-72 w-auto max-w-full rounded">
+            ${layoutOverlay()}
+          </div>
+        </div>
+        <div class="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
+          <div class="min-w-0 flex-1 basis-40">
+            <p class="truncate text-sm font-medium text-slate-800">${esc(file.name)}</p>
+            <p class="text-xs text-slate-500 font-mono">${img.naturalWidth}×${img.naturalHeight} px · ${fmtBytes(file.size)}</p>
+          </div>
+          ${state.result ? `<button type="button" data-action="toggle-layout" aria-pressed="${state.showLayout}"
+            class="${btn} ${state.showLayout ? '!bg-indigo-50 !border-indigo-200 !text-indigo-700' : ''}">${icon('layers', 'w-3.5 h-3.5')}Layout</button>` : ''}
+          <button type="button" data-action="pick" class="${btn}" ${state.busy ? 'disabled' : ''}>${icon('refresh', 'w-3.5 h-3.5')}Replace</button>
+          <button type="button" data-action="remove" class="${btn}" ${state.busy ? 'disabled' : ''}>${icon('x', 'w-3.5 h-3.5')}Remove</button>
+        </div>
+      </div>`;
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Subject + action button
+   * ------------------------------------------------------------------ */
+  function renderSubjects() {
+    els.subjects.innerHTML = SUBJECTS.map((s) => {
+      const on = s.id === state.subject;
+      return `<button type="button" role="radio" aria-checked="${on}" data-action="subject:${s.id}" ${state.busy ? 'disabled' : ''}
+        class="relative text-left rounded-xl border p-3.5 flex items-start gap-3 transition disabled:cursor-not-allowed ${on
+          ? 'border-indigo-500 bg-indigo-50/60 ring-2 ring-indigo-500/20'
+          : 'border-slate-200 bg-white shadow-sm hover:border-slate-300 hover:bg-slate-50'}">
+        <span class="w-9 h-9 shrink-0 rounded-lg grid place-items-center ${on ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600'}">${icon(s.icon, 'w-[18px] h-[18px]')}</span>
+        <span class="min-w-0">
+          <span class="block text-sm font-semibold text-slate-900">${s.label}</span>
+          <span class="block text-xs text-slate-500 mt-0.5">${s.hint}</span>
+        </span>
+        ${on ? `<span class="absolute top-2.5 right-2.5 w-4 h-4 rounded-full bg-indigo-600 text-white grid place-items-center">${icon('check', 'w-2.5 h-2.5', 3.5)}</span>` : ''}
+      </button>`;
+    }).join('');
+  }
+
+  function renderAction() {
+    const btn = els.processBtn;
+    const ready = !!state.file && !state.busy;
+    btn.disabled = !ready;
+    btn.className = `w-full h-12 rounded-xl font-display font-bold text-[15px] inline-flex items-center justify-center gap-2 transition ${ready
+      ? 'bg-gradient-to-b from-indigo-500 to-indigo-600 text-white shadow-md hover:from-indigo-600 hover:to-indigo-700 active:scale-[.99]'
+      : 'bg-slate-100 text-slate-400 cursor-not-allowed'}`;
+    btn.innerHTML = state.busy
+      ? `<svg class="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.22-8.56"/></svg>Processing…`
+      : `${icon('play', 'w-4 h-4')}Process Document`;
+    els.processHint.textContent = state.busy ? 'Running recognition pipeline…'
+      : state.file ? `Ready · ${state.subject}` : 'Upload an image to enable processing';
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Output: tabs + panels
+   * ------------------------------------------------------------------ */
+  function renderTabs() {
+    els.tabs.innerHTML = TABS.map((t) => {
+      const on = t.id === state.tab;
+      return `<button type="button" role="tab" id="tab-${t.id}" aria-selected="${on}" data-action="tab:${t.id}"
+        class="whitespace-nowrap pb-3 -mb-px border-b-2 text-sm font-semibold transition ${on
+          ? 'border-indigo-600 text-indigo-700' : 'border-transparent text-slate-500 hover:text-slate-800'}">${t.label}</button>`;
+    }).join('');
+    els.body.setAttribute('aria-labelledby', `tab-${state.tab}`);
+  }
+
+  function placeholder() {
+    const step = (n, t) => `<li class="flex items-center gap-2.5 text-sm text-slate-600"><span class="w-5 h-5 rounded-md bg-slate-100 text-slate-500 text-[11px] font-bold grid place-items-center">${n}</span>${t}</li>`;
+    return `<div class="h-full min-h-[420px] flex flex-col items-center justify-center text-center">
+      <div class="w-16 h-16 rounded-xl border-2 border-dashed border-slate-300 text-slate-400 grid place-items-center mb-5">${icon('file', 'w-7 h-7', 1.5)}</div>
+      <h3 class="font-display font-bold text-slate-900">No document processed yet</h3>
+      <p class="text-sm text-slate-500 mt-1.5 max-w-xs">Recognized blocks, the JSON payload and the API trace will appear here.</p>
+      <ul class="mt-6 space-y-2.5 text-left">${step(1, 'Upload a handwritten page')}${step(2, 'Pick the subject')}${step(3, 'Press Process Document')}</ul>
+    </div>`;
+  }
+
+  function errorPanel() {
+    return `<div class="min-h-[420px] flex flex-col items-center justify-center text-center">
+      <div class="w-14 h-14 rounded-xl bg-rose-50 text-rose-600 grid place-items-center mb-4">${icon('alert', 'w-7 h-7', 1.75)}</div>
+      <h3 class="font-display font-bold text-slate-900">Recognition failed</h3>
+      <p class="text-sm text-slate-600 mt-1.5 max-w-sm break-words">${esc(state.error)}</p>
+      <button type="button" data-action="process" ${state.file ? '' : 'disabled'}
+        class="mt-5 h-10 px-4 rounded-lg bg-slate-900 text-white text-sm font-semibold hover:bg-slate-800 transition inline-flex items-center gap-2">${icon('refresh', 'w-4 h-4')}Try again</button>
+    </div>`;
+  }
+
+  function confidenceBadge(v) {
+    const c = v >= 0.95 ? 'bg-emerald-500' : v >= 0.9 ? 'bg-sky-500' : 'bg-amber-500';
+    return `<div class="flex items-center gap-2" title="Confidence ${pct(v)}">
+      <div class="w-14 h-1.5 rounded-full bg-slate-100 overflow-hidden"><div class="h-full rounded-full ${c}" style="width:${pct(v)}"></div></div>
+      <span class="font-mono text-xs text-slate-600 tabular-nums">${pct(v)}</span></div>`;
+  }
+
+  function latexBlock(latex, extra = '') {
+    return `<div class="js-katex ${extra}" data-latex="${esc(latex)}" data-display="1"></div>`;
+  }
+
+  function blockBody(b) {
+    switch (b.type) {
+      case 'text':
+        return `<p class="text-[15px] leading-relaxed text-slate-800">${esc(b.content)}</p>`;
+
+      case 'formula':
+        return `<div class="rounded-lg bg-slate-50 border border-slate-100 px-4 py-3 text-center overflow-x-auto">${latexBlock(b.latex)}</div>
+          <p class="mt-2 font-mono text-[11px] text-slate-400 break-all"><span class="select-none">LaTeX </span>${esc(b.latex)}</p>`;
+
+      case 'chem_structure':
+        return `<div class="flex flex-wrap items-center gap-3">
+          <span class="inline-flex items-center rounded-lg border border-violet-200 bg-violet-50 overflow-hidden shadow-sm">
+            <span class="px-2.5 py-1.5 text-[11px] font-bold tracking-wider text-violet-700 bg-violet-100">SMILES</span>
+            <code class="px-3 py-1.5 font-mono text-sm text-violet-900">${esc(b.smiles)}</code>
+          </span>
+          ${b.image ? `<span class="inline-flex items-center gap-1.5 font-mono text-xs text-slate-500">${icon('image', 'w-3.5 h-3.5')}${esc(b.image)}</span>` : ''}
+        </div>`;
+
+      case 'drawing': {
+        const labels = b.labels || [];
+        const dots = labels.map((l) => {
+          const [x, y] = l.xy;
+          const flip = x > 0.8;
+          return `<span class="absolute flex items-center gap-1 -translate-y-1/2 ${flip ? '-translate-x-full flex-row-reverse' : ''}" style="left:${x * 100}%;top:${y * 100}%">
+            <span class="w-2 h-2 rounded-full bg-amber-500 ring-2 ring-white shrink-0"></span>
+            <span class="js-katex text-slate-800 text-sm bg-white/80 rounded px-1" data-latex="${esc(l.text)}" data-display="0"></span></span>`;
+        }).join('');
+        const chips = labels.map((l) => `<span class="inline-flex items-center gap-1.5 rounded-md bg-slate-100 px-2 py-1 text-xs text-slate-700">
+            <span class="js-katex" data-latex="${esc(l.text)}" data-display="0"></span>
+            <span class="font-mono text-slate-400">(${l.xy[0].toFixed(2)}, ${l.xy[1].toFixed(2)})</span></span>`).join('');
+        return `<div class="figure-grid relative h-44 rounded-lg border border-slate-200 overflow-hidden">
+            <span class="absolute right-2.5 top-2.5 inline-flex items-center gap-1.5 rounded-md bg-white/90 border border-slate-200 px-2 py-1 font-mono text-xs text-slate-700 shadow-sm">${icon('shapes', 'w-3.5 h-3.5 text-amber-600')}${esc(b.drawingType || 'drawing')}</span>
+            ${dots}
+          </div>
+          ${chips ? `<div class="mt-2.5 flex flex-wrap items-center gap-2"><span class="text-xs font-semibold text-slate-500">Labels</span>${chips}</div>` : ''}
+          ${b.image ? `<p class="mt-2 inline-flex items-center gap-1.5 font-mono text-xs text-slate-500">${icon('image', 'w-3.5 h-3.5')}${esc(b.image)}</p>` : ''}`;
+      }
+
+      case 'answer':
+        return `<div class="rounded-lg bg-emerald-50 border border-emerald-200 px-4 py-3 flex items-center justify-center overflow-x-auto">${latexBlock(b.latex, 'text-emerald-900')}</div>`;
+
+      default:
+        return `<pre class="font-mono text-xs text-slate-600 whitespace-pre-wrap">${esc(JSON.stringify(b, null, 2))}</pre>`;
+    }
+  }
+
+  function blockCard(b, i) {
+    const m = typeMeta(b.type);
+    const bbox = Array.isArray(b.bbox)
+      ? `<p class="mt-3 pt-2.5 border-t border-slate-100 font-mono text-[11px] text-slate-400">bbox [${b.bbox.map((n) => n.toFixed(2)).join(', ')}]</p>` : '';
+    return `<article class="rise rounded-xl border border-slate-200 bg-white shadow-sm p-4 transition hover:border-slate-300" data-block="${esc(b.id)}" style="animation-delay:${i * 90}ms">
+      <div class="flex items-center gap-2 mb-3">
+        <span class="w-6 h-6 rounded-md bg-slate-100 text-slate-600 text-xs font-bold grid place-items-center">${esc(b.order)}</span>
+        <span class="rounded-md px-2 py-0.5 text-xs font-semibold ${m.pill}">${esc(m.label)}</span>
+        <span class="font-mono text-xs text-slate-400">${esc(b.id)}</span>
+        <span class="ml-auto">${confidenceBadge(b.confidence)}</span>
+      </div>
+      ${blockBody(b)}${bbox}
+    </article>`;
+  }
+
+  function renderRendered() {
+    const { data } = state.result;
+    const allBlocks = data.pages.flatMap((p) => p.blocks);
+    const avg = allBlocks.reduce((s, b) => s + b.confidence, 0) / (allBlocks.length || 1);
+    const usable = data.pages.every((p) => p.quality && p.quality.usable);
+    let n = 0;
+    const pages = data.pages.map((p) => {
+      const blocks = [...p.blocks].sort((a, b) => a.order - b.order);
+      return `${data.pages.length > 1 ? `<h3 class="font-display font-bold text-sm text-slate-500 mt-2">Page ${esc(p.index)}</h3>` : ''}
+        ${blocks.map((b) => blockCard(b, n++)).join('')}`;
+    }).join('');
+    return `<div class="space-y-4">
+      <div class="flex flex-wrap items-center gap-2">
+        <span class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-inset ${usable ? 'bg-emerald-50 text-emerald-700 ring-emerald-200' : 'bg-amber-50 text-amber-700 ring-amber-200'}">
+          ${icon(usable ? 'check' : 'alert', 'w-3.5 h-3.5', 2.5)}${usable ? 'Scan quality: usable' : 'Scan quality: low'}</span>
+        <span class="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">${allBlocks.length} blocks</span>
+        <span class="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">Avg. confidence ${pct(avg)}</span>
+      </div>
+      ${pages}
+    </div>`;
+  }
+
+  function highlightJson(text) {
+    const safe = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return safe.replace(
+      /("(?:\\.|[^\\"])*")(\s*:)?|\b(true|false)\b|\bnull\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g,
+      (m, str, colon, bool) => {
+        if (str) return colon ? `<span class="j-key">${str}</span>${colon}` : `<span class="j-str">${str}</span>`;
+        if (bool) return `<span class="j-bool">${m}</span>`;
+        if (m === 'null') return `<span class="j-null">${m}</span>`;
+        return `<span class="j-num">${m}</span>`;
+      });
+  }
+
+  function renderJson() {
+    return `<div class="relative">
+      <button type="button" data-action="copy-json" class="absolute right-2.5 top-2.5 z-10 h-8 px-3 rounded-lg border border-slate-200 bg-white text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50 transition inline-flex items-center gap-1.5">${icon('copy', 'w-3.5 h-3.5')}Copy</button>
+      <pre class="rise rounded-xl border border-slate-200 bg-slate-50 p-4 pt-12 overflow-x-auto max-h-[640px] overflow-y-auto font-mono text-[13px] leading-6 text-slate-700"><code>${highlightJson(state.result.raw)}</code></pre>
+    </div>`;
+  }
+
+  function renderTrace() {
+    const { data, trace } = state.result;
+    const blocks = data.pages.flatMap((p) => p.blocks);
+    const avg = blocks.reduce((s, b) => s + b.confidence, 0) / (blocks.length || 1);
+    const tile = (label, value, sub) => `<div class="rounded-xl border border-slate-200 bg-white shadow-sm p-3.5">
+      <p class="text-xs font-medium text-slate-500">${label}</p>
+      <p class="mt-1 font-display font-extrabold text-xl text-slate-900 tabular-nums">${value}</p>
+      ${sub ? `<p class="text-[11px] text-slate-400 mt-0.5">${sub}</p>` : ''}</div>`;
+    const row = (k, v) => `<div class="flex items-baseline justify-between gap-4 py-2.5">
+      <dt class="text-sm text-slate-500 shrink-0">${k}</dt><dd class="text-sm font-mono text-slate-800 text-right break-all">${v}</dd></div>`;
+    const curl = `curl -X POST "${location.origin}/v1/recognize" \\\n  -H "Content-Type: application/json" \\\n  -d '{"subject": "${trace.subject}", "image_data": "data:image/jpeg;base64,..."}'`;
+    return `<div class="rise space-y-5">
+      <div class="grid grid-cols-2 xl:grid-cols-4 gap-3">
+        ${tile('Response time', `${(trace.apiMs / 1000).toFixed(2)}<span class="text-sm font-semibold text-slate-400"> s</span>`, 'Round trip, client side')}
+        ${tile('Server time', trace.serverMs != null ? `${(trace.serverMs / 1000).toFixed(2)}<span class="text-sm font-semibold text-slate-400"> s</span>` : 'n/a', 'X-Process-Time')}
+        ${tile('Model version', esc(data.modelVersion), 'modelVersion')}
+        ${tile('HTTP status', `<span class="text-emerald-600">${trace.status}</span>`, esc(trace.statusText || 'OK'))}
+      </div>
+      <dl class="rounded-xl border border-slate-200 bg-white shadow-sm px-4 divide-y divide-slate-100">
+        ${row('Endpoint', 'POST /v1/recognize')}
+        ${row('Job ID', esc(data.jobId))}
+        ${row('Subject', esc(trace.subject))}
+        ${row('Environment', esc(ENVS[trace.env].label))}
+        ${row('Request size', fmtBytes(trace.requestBytes))}
+        ${row('Response size', fmtBytes(trace.responseBytes))}
+        ${row('Blocks detected', blocks.length)}
+        ${row('Avg. confidence', pct(avg))}
+        ${row('Completed at', esc(trace.completedAt))}
+      </dl>
+      <div>
+        <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">Reproduce with cURL</p>
+        <pre class="rounded-xl border border-slate-200 bg-slate-50 p-4 overflow-x-auto font-mono text-[12.5px] leading-6 text-slate-700"><code>${esc(curl)}</code></pre>
+      </div>
+    </div>`;
+  }
+
+  function typeset(root) {
+    root.querySelectorAll('.js-katex').forEach((el) => {
+      const latex = el.dataset.latex;
+      if (window.katex) {
+        try {
+          window.katex.render(latex, el, { displayMode: el.dataset.display === '1', throwOnError: false, strict: 'ignore' });
+          return;
+        } catch (_) { /* fall through to plain text */ }
+      }
+      el.textContent = latex;
+      el.classList.add('font-mono', 'text-sm');
+    });
+  }
+
+  function renderOutput() {
+    renderTabs();
+    els.jobPill.classList.toggle('hidden', !state.result);
+    if (state.result) els.jobPill.textContent = state.result.data.jobId;
+
+    let html;
+    if (state.error) html = errorPanel();
+    else if (!state.result) html = placeholder();
+    else if (state.tab === 'json') html = renderJson();
+    else if (state.tab === 'trace') html = renderTrace();
+    else html = renderRendered();
+
+    els.body.innerHTML = html;
+    typeset(els.body);
+  }
+
+  function renderAll() {
+    renderEnv();
+    renderDrop();
+    renderSubjects();
+    renderAction();
+    renderOutput();
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Processing pipeline (visual simulation + real API call)
+   * ------------------------------------------------------------------ */
+  function startPipeline() {
+    const per = PIPELINE_MS / PIPELINE.length;
+    const timers = [];
+    const t0 = performance.now();
+    let ticker = null;
+
+    const draw = (active, allDone) => {
+      els.steps.innerHTML = PIPELINE.map((label, i) => {
+        const done = allDone || i < active;
+        const current = !allDone && i === active;
+        const mark = done
+          ? `<span class="w-5 h-5 rounded-full bg-emerald-500 text-white grid place-items-center shrink-0">${icon('check', 'w-3 h-3', 3.5)}</span>`
+          : current
+            ? `<span class="w-5 h-5 rounded-full border-2 border-indigo-200 border-t-indigo-600 animate-spin shrink-0"></span>`
+            : `<span class="w-5 h-5 rounded-full border-2 border-slate-200 shrink-0"></span>`;
+        const text = done ? 'text-slate-500' : current ? 'text-slate-900 font-semibold' : 'text-slate-400';
+        return `<li class="flex items-center gap-3 text-sm ${text} ${current ? 'rise' : ''}">${mark}<span>${label}</span></li>`;
+      }).join('');
+      els.bar.style.width = allDone ? '100%' : `${Math.round((active / PIPELINE.length) * 100) + 8}%`;
+    };
+
+    els.overlay.classList.remove('hidden');
+    els.elapsed.textContent = '0.0s';
+    els.bar.style.width = '0%';
+    draw(0, false);
+    ticker = setInterval(() => { els.elapsed.textContent = `${((performance.now() - t0) / 1000).toFixed(1)}s`; }, 100);
+    for (let i = 1; i < PIPELINE.length; i++) timers.push(setTimeout(() => draw(i, false), i * per));
+
+    const stop = () => { timers.forEach(clearTimeout); clearInterval(ticker); };
+    return {
+      minDuration: sleep(PIPELINE_MS),
+      async finish() {           // success: tick everything off, then hide
+        stop();
+        draw(PIPELINE.length, true);
+        els.elapsed.textContent = `${((performance.now() - t0) / 1000).toFixed(1)}s`;
+        await sleep(450);
+        els.overlay.classList.add('hidden');
+      },
+      cancel() { stop(); els.overlay.classList.add('hidden'); }
+    };
+  }
+
+  function imageToDataUrl(img, maxSide = 1600) {
+    const scale = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL('image/jpeg', 0.85);
+  }
+
+  async function errorMessage(res, text) {
+    try {
+      const j = JSON.parse(text);
+      if (typeof j.detail === 'string') return j.detail;
+      if (Array.isArray(j.detail)) return j.detail.map((d) => `${(d.loc || []).join('.')}: ${d.msg}`).join('; ');
+    } catch (_) { /* not JSON */ }
+    return `Server responded with HTTP ${res.status}.`;
+  }
+
+  async function processDocument() {
+    if (state.busy || !state.file) return;
+    state.busy = true;
+    state.error = null;
+    state.result = null;
+    state.showLayout = false;
+    state.tab = 'rendered';
+    renderAll();
+
+    const pipeline = startPipeline();
+    const subject = state.subject;
+    const env = state.env;
+
+    try {
+      const body = JSON.stringify({ subject, image_data: imageToDataUrl(state.img) });
+      const t0 = performance.now();
+      const api = fetch('/v1/recognize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body
+      }).then(async (res) => {
+        const text = await res.text();
+        const apiMs = performance.now() - t0;
+        if (!res.ok) throw new Error(await errorMessage(res, text));
+        return { res, text, apiMs };
+      });
+
+      const [{ res, text, apiMs }] = await Promise.all([api, pipeline.minDuration]);
+      const data = JSON.parse(text);
+      const serverMs = parseFloat(res.headers.get('X-Process-Time'));
+
+      state.result = {
+        data,
+        raw: JSON.stringify(data, null, 2),
+        trace: {
+          subject, env, apiMs,
+          serverMs: Number.isFinite(serverMs) ? serverMs : null,
+          status: res.status, statusText: res.statusText,
+          requestBytes: new Blob([body]).size,
+          responseBytes: new Blob([text]).size,
+          completedAt: new Date().toLocaleTimeString([], { hour12: false })
+        }
+      };
+      state.tab = 'rendered';
+      state.showLayout = true;
+      await pipeline.finish();
+    } catch (err) {
+      pipeline.cancel();
+      state.error = err instanceof TypeError ? 'Could not reach the recognition service. Check your connection and try again.' : (err.message || 'Unexpected error.');
+    } finally {
+      state.busy = false;
+      renderAll();
+    }
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Events
+   * ------------------------------------------------------------------ */
+  async function copyText(text) {
+    try { await navigator.clipboard.writeText(text); return true; } catch (_) { /* fall back */ }
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (_) { ok = false; }
+    ta.remove();
+    return ok;
+  }
+
+  document.addEventListener('click', async (e) => {
+    const el = e.target.closest('[data-action]');
+    if (!el || el.disabled) return;
+    const [action, arg] = el.dataset.action.split(':');
+    switch (action) {
+      case 'pick': if (!state.busy) els.fileInput.click(); break;
+      case 'remove': removeFile(); break;
+      case 'subject': if (!state.busy) { state.subject = arg; renderSubjects(); renderAction(); } break;
+      case 'tab': state.tab = arg; renderOutput(); break;
+      case 'process': processDocument(); break;
+      case 'toggle-layout': state.showLayout = !state.showLayout; renderDrop(); break;
+      case 'open-settings': openSettings(); break;
+      case 'close-settings': closeSettings(); break;
+      case 'env':
+        state.env = arg; store.set('juz40.env', arg); renderEnv();
+        els.envOptions.querySelector('[aria-checked="true"]')?.focus();
+        break;
+      case 'copy-json': {
+        const ok = await copyText(state.result.raw);
+        el.innerHTML = ok ? `${icon('check', 'w-3.5 h-3.5')}Copied` : 'Copy failed';
+        setTimeout(() => { el.innerHTML = `${icon('copy', 'w-3.5 h-3.5')}Copy`; }, 1600);
+        break;
+      }
+    }
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !els.settings.classList.contains('hidden')) { closeSettings(); return; }
+    if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('[role="button"][data-action]')) {
+      e.preventDefault();
+      e.target.click();
+    }
+  });
+
+  els.fileInput.addEventListener('change', () => {
+    setFile(els.fileInput.files[0]);
+    els.fileInput.value = '';
+  });
+
+  // Drag & drop
+  ['dragenter', 'dragover'].forEach((t) => els.drop.addEventListener(t, (e) => {
+    e.preventDefault();
+    if (!state.busy) els.drop.classList.add('is-drag');
+  }));
+  els.drop.addEventListener('dragleave', (e) => {
+    if (!els.drop.contains(e.relatedTarget)) els.drop.classList.remove('is-drag');
+  });
+  els.drop.addEventListener('drop', (e) => {
+    e.preventDefault();
+    els.drop.classList.remove('is-drag');
+    setFile(e.dataTransfer.files[0]);
+  });
+  // A missed drop must not navigate the page to the dropped file.
+  ['dragover', 'drop'].forEach((t) => window.addEventListener(t, (e) => e.preventDefault()));
+
+  // Hovering a result card highlights its box on the preview
+  function setHot(id) {
+    if (state.hot === id) return;
+    state.hot = id;
+    els.drop.querySelectorAll('.ov-box').forEach((b) => b.classList.toggle('is-hot', b.dataset.ov === id));
+  }
+  els.body.addEventListener('mouseover', (e) => setHot(e.target.closest('[data-block]')?.dataset.block ?? null));
+  els.body.addEventListener('mouseleave', () => setHot(null));
+
+  renderAll();
+})();
+</script>
+</body>
+</html>
